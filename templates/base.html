@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a1530">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>{% block title %}Gomorrah{% endblock %}</title>
+  <link rel="manifest" href="{{ url_for('manifest') }}">
+  <link rel="icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  {% set nav = [
+    ('index', 'Painel', 'M3 11l9-8 9 8M5 9.5V21h5v-6h4v6h5V9.5'),
+    ('transactions', 'Lançamentos', 'M4 6h16M4 12h16M4 18h10'),
+    ('budgets', 'Orçamentos', 'M12 3a9 9 0 1 0 9 9h-9zM15 3.5A9 9 0 0 1 20.5 9H15z'),
+    ('settings', 'Ajustes', 'M4 7h10M18 7h2M4 17h2M10 17h10M16 4v6M8 14v6')] %}
+  {% block shell %}
+  <header class="top">
+    <a class="brand" href="{{ url_for('index') }}">Gomorrah</a>
+    <nav class="topnav">
+      {% for ep, label, path in nav %}
+        <a href="{{ url_for(ep) }}" {% if request.endpoint == ep %}aria-current="page"{% endif %}>{{ label }}</a>
+      {% endfor %}
+      <a class="btn" href="{{ url_for('new_transaction') }}">+ Novo lançamento</a>
+    </nav>
+  </header>
+  <nav class="tabbar" aria-label="Principal">
+    {% for ep, label, path in nav %}
+      <a href="{{ url_for(ep) }}" {% if request.endpoint == ep %}aria-current="page"{% endif %}>
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{ path }}"/></svg>
+        <span>{{ label }}</span>
+      </a>
+    {% endfor %}
+  </nav>
+  <a class="fab" href="{{ url_for('new_transaction') }}" aria-label="Novo lançamento">+</a>
+  {% endblock %}
+  <main>
+    {% for category, message in get_flashed_messages(with_categories=true) %}
+      <p class="flash {{ category }}" role="status">{{ message }}</p>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+  <script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("{{ url_for('service_worker') }}");</script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% from "_macros.html" import monthnav with context %}
+{% block title %}Orçamentos · Gomorrah{% endblock %}
+{% block content %}
+{{ monthnav('budgets', month, prev, next) }}
+<p class="muted">Defina quanto pretende gastar em cada categoria neste mês. Orçado: {{ total_budget|brl }} · Gasto: {{ total_spent|brl }}</p>
+<form method="post" class="budgetform">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="mes" value="{{ month.strftime('%Y-%m') }}">
+  <ul class="cats">
+    {% for r in rows %}
+    <li>
+      <div class="line">
+        <label for="b_{{ r.id }}">{{ r.name }}<br><small>gasto {{ r.spent|brl }}</small></label>
+        <input id="b_{{ r.id }}" name="b_{{ r.id }}" value="{{ r.budget|dec }}" inputmode="decimal" placeholder="0,00">
+      </div>
+      {% if r.budget %}<div class="track"><span class="fill {{ 'over' if r.pct > 100 else ('warn' if r.pct >= 80 else '') }}" style="width: {{ [r.pct, 100]|min }}%"></span></div>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  <button class="btn">Salvar orçamento</button>
+</form>
+<form method="post" action="{{ url_for('copy_budgets') }}" class="inline">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="mes" value="{{ month.strftime('%Y-%m') }}">
+  <button class="link">Copiar orçamentos do mês anterior</button>
+</form>
+{% endblock %}

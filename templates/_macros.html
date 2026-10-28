@@ -1,0 +1,36 @@
+{% macro monthnav(endpoint, month, prev, next) %}
+<div class="monthnav">
+  <a href="{{ url_for(endpoint, mes=prev) }}" aria-label="Mês anterior">‹</a>
+  <h1>{{ month|mes_ano }}</h1>
+  <a href="{{ url_for(endpoint, mes=next) }}" aria-label="Próximo mês">›</a>
+</div>
+{% endmacro %}
+
+{% macro tx_list(items) %}
+{% if items %}
+<ul class="txlist">
+  {% for t in items %}
+  <li>
+    <span class="avatar">{{ (t.category.name[0] if t.category else '·')|upper }}</span>
+    <div class="meta">
+      <strong>{{ t.description }}</strong>
+      <small>{{ t.category.name if t.category else 'Sem categoria' }} · {{ t.date.strftime('%d/%m') }}</small>
+    </div>
+    <span class="amt {{ 'inc' if t.kind == 'receita' else 'exp' }}">{{ '+' if t.kind == 'receita' else '−' }} {{ t.amount_cents|brl }}</span>
+    <details class="more">
+      <summary aria-label="Ações do lançamento">⋯</summary>
+      <div>
+        <a href="{{ url_for('edit_transaction', tx_id=t.id) }}">Editar</a>
+        <form method="post" action="{{ url_for('delete_transaction', tx_id=t.id) }}" onsubmit="return confirm('Excluir este lançamento?')">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="link danger">Excluir</button>
+        </form>
+      </div>
+    </details>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">Nenhum lançamento.</p>
+{% endif %}
+{% endmacro %}

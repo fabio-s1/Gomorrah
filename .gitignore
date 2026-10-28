@@ -1,0 +1,16 @@
+# Ambiente e cache do Python
+.venv/
+__pycache__/
+*.pyc
+
+# Dados privados do usuário (finanças, chave de sessão): NUNCA versionar
+instance/
+*.db
+*.sqlite3
+*.csv
+.env
+
+# Arquivos de sistema/editor
+.DS_Store
+Thumbs.db
+.vscode/

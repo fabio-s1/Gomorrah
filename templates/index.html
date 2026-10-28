@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% from "_macros.html" import monthnav, tx_list with context %}
+{% block content %}
+{{ monthnav('index', month, prev, next) }}
+
+<section class="hero">
+  <span class="eyebrow">Saldo do mês</span>
+  <strong class="big {{ 'neg' if balance < 0 }}">{{ balance|brl }}</strong>
+  <dl>
+    <div><dt>Receitas</dt><dd class="inc">{{ income|brl }}</dd></div>
+    <div><dt>Despesas</dt><dd class="exp">{{ expense|brl }}</dd></div>
+  </dl>
+  {% if total_budget %}
+  <div class="budgetline">
+    <div class="line"><span>Orçamento usado</span><span>{{ budget_pct }}% de {{ total_budget|brl }}</span></div>
+    <div class="track"><span class="fill {{ 'over' if budget_pct > 100 else ('warn' if budget_pct >= 80 else '') }}" style="width: {{ [budget_pct, 100]|min }}%"></span></div>
+  </div>
+  {% endif %}
+</section>
+
+{% if insights %}
+<ul class="insights">{% for i in insights %}<li>{{ i }}</li>{% endfor %}</ul>
+{% endif %}
+
+<section>
+  <div class="sechead"><h2>Por categoria</h2><a href="{{ url_for('budgets', mes=month.strftime('%Y-%m')) }}">Ajustar orçamento</a></div>
+  {% if rows %}
+  <ul class="cats">
+    {% for r in rows %}
+    <li>
+      <div class="line"><span>{{ r.name }}</span>
+        <span>{{ r.spent|brl }}{% if r.budget %} <small>/ {{ r.budget|brl }}</small>{% else %} <small>sem orçamento</small>{% endif %}</span></div>
+      <div class="track"><span class="fill {{ 'over' if r.budget and r.pct > 100 else ('warn' if r.budget and r.pct >= 80 else '') }}" style="width: {{ [r.pct, 100]|min }}%"></span></div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="empty">Nenhuma despesa ou orçamento neste mês.</p>{% endif %}
+</section>
+
+<section>
+  <h2>Despesas nos últimos 6 meses</h2>
+  <div class="trend">
+    {% for m in trend %}
+    <div class="col" title="{{ m.value|brl }}">
+      <small>{{ m.value|brl if loop.last else '' }}</small>
+      <span class="bar {{ 'now' if loop.last }}" style="height: {{ (m.value * 100 / trend_max)|round|int }}%"></span>
+      <small>{{ m.label }}</small>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section>
+  <div class="sechead"><h2>Últimos lançamentos</h2><a href="{{ url_for('transactions', mes=month.strftime('%Y-%m')) }}">Ver todos</a></div>
+  {{ tx_list(recent) }}
+</section>
+{% endblock %}

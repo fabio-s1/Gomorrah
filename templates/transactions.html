@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% from "_macros.html" import monthnav, tx_list with context %}
+{% block title %}Lançamentos · Gomorrah{% endblock %}
+{% block content %}
+{{ monthnav('transactions', month, prev, next) }}
+<form method="get" class="filters">
+  <input type="hidden" name="mes" value="{{ month.strftime('%Y-%m') }}">
+  <input type="search" name="q" value="{{ term }}" placeholder="Buscar descrição" aria-label="Buscar descrição">
+  <select name="tipo" aria-label="Tipo">
+    <option value="">Todos</option>
+    <option value="despesa" {{ 'selected' if kind == 'despesa' }}>Despesas</option>
+    <option value="receita" {{ 'selected' if kind == 'receita' }}>Receitas</option>
+  </select>
+  <select name="categoria" aria-label="Categoria">
+    <option value="">Todas as categorias</option>
+    {% for c in categories %}<option value="{{ c.id }}" {{ 'selected' if cat == c.id|string }}>{{ c.name }}</option>{% endfor %}
+  </select>
+  <button class="btn">Filtrar</button>
+</form>
+<p class="muted">{{ items|length }} lançamento(s) · resultado {{ total|brl }}</p>
+{{ tx_list(items) }}
+{% endblock %}

@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Ajustes · Gomorrah{% endblock %}
+{% block content %}
+<h1>Ajustes</h1>
+
+<section>
+  <h2>Categorias</h2>
+  <form method="post" action="{{ url_for('add_category') }}" class="inline">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input name="name" placeholder="Nova categoria" maxlength="50" required aria-label="Nome da nova categoria">
+    <button class="btn">Criar</button>
+  </form>
+  <ul class="catlist">
+    {% for c in categories %}
+    <li>
+      <span>{{ c.name }}</span>
+      <span class="muted">{{ usage.get(c.id, 0) }} lançamento(s)</span>
+      <form method="post" action="{{ url_for('delete_category', cat_id=c.id) }}" onsubmit="return confirm('Excluir a categoria {{ c.name|e }}?')">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="link danger">Excluir</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section>
+  <h2>Dados</h2>
+  <p class="muted">Exporte tudo em CSV (lançamentos e orçamentos) para backup ou para abrir no Excel. Para importar, use o mesmo formato: <code>tipo,data,valor,categoria,descricao</code> com tipo = receita, despesa ou orcamento.</p>
+  <p><a class="btn" href="{{ url_for('export_csv') }}">Exportar CSV</a></p>
+  <form method="post" action="{{ url_for('import_csv') }}" enctype="multipart/form-data" class="inline">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="file" name="file" accept=".csv,text/csv" required aria-label="Arquivo CSV">
+    <button class="btn">Importar</button>
+  </form>
+</section>
+
+<section>
+  <h2>Conta</h2>
+  <p class="muted">No celular, abra o Gomorrah no Chrome e use "Instalar app" (ou "Adicionar à tela inicial") no menu do navegador.</p>
+  {% if auth_on %}
+  <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn">Sair</button></form>
+  {% else %}
+  <p class="muted">Sem senha configurada: use apenas neste computador. Para acessar do celular, defina <code>GOMORRAH_PASSWORD</code> (veja o README).</p>
+  {% endif %}
+</section>
+{% endblock %}

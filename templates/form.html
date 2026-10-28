@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · Gomorrah{% endblock %}
+{% block content %}
+<h1>{{ title }}</h1>
+<form method="post" class="form">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <fieldset class="kind">
+    <legend>Tipo</legend>
+    <label><input type="radio" name="kind" value="despesa" {{ 'checked' if v.kind != 'receita' }}> Despesa</label>
+    <label><input type="radio" name="kind" value="receita" {{ 'checked' if v.kind == 'receita' }}> Receita</label>
+  </fieldset>
+  <label>Descrição
+    <input name="description" value="{{ v.description }}" maxlength="120" required autofocus>
+  </label>
+  <label>Valor (R$)
+    <input name="amount" value="{{ v.amount }}" inputmode="decimal" placeholder="49,90" required>
+  </label>
+  <label>Data
+    <input type="date" name="date" value="{{ v.date }}" required>
+  </label>
+  <label>Categoria
+    <select name="category_id">
+      <option value="">Sem categoria</option>
+      {% for c in categories %}
+        <option value="{{ c.id }}" {{ 'selected' if v.category_id|string == c.id|string }}>{{ c.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <div class="row">
+    <button class="btn">Salvar lançamento</button>
+    <a href="{{ url_for('index') }}">Cancelar</a>
+  </div>
+</form>
+{% endblock %}
