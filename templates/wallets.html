@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% from "_macros.html" import monthnav with context %}
+{% block title %}Carteiras · Gomorrah{% endblock %}
+{% block content %}
+{% set pal = ['#ffffff', '#7fb2ff', '#4f86e8', '#6fd6a4', '#ffd166', '#c9a7ff', '#ff9580', '#9db0d4'] %}
+{{ monthnav('wallets', month, prev, next) }}
+
+<section class="hero">
+  <span class="eyebrow">Patrimônio total ao fim do mês</span>
+  <strong class="big {{ 'neg' if total < 0 }}">{{ total|brl }}</strong>
+  {% if positive %}
+  <div class="stack" role="img" aria-label="Distribuição do patrimônio entre as carteiras">
+    {% for i in items if i.width > 0 %}<span style="width: {{ i.width|round(2) }}%; background: {{ pal[i.color] }}"></span>{% endfor %}
+  </div>
+  {% endif %}
+  <dl>
+    <div><dt>Entrou no mês</dt><dd class="inc">{{ income|brl }}</dd></div>
+    <div><dt>Saiu no mês</dt><dd class="exp">{{ expense|brl }}</dd></div>
+  </dl>
+</section>
+
+<div class="actionrow">
+  <a class="btn" href="{{ url_for('new_wallet') }}">+ Nova carteira</a>
+  <a class="btn ghost" href="{{ url_for('new_transfer') }}">⇄ Transferir</a>
+</div>
+
+<section>
+  <h2>Minhas carteiras</h2>
+  <ul class="walletlist">
+    {% for i in items %}
+    <li>
+      <span class="dot" style="background: {{ pal[i.color] }}"></span>
+      <div class="meta">
+        <strong>{{ i.w.name }}</strong>
+        <small>{{ WALLET_KINDS[i.w.kind] }}{% if positive %} · {{ i.share }}% do total{% endif %}</small>
+      </div>
+      <div class="right">
+        <strong class="{{ 'exp' if i.balance < 0 }}">{{ i.balance|brl }}</strong>
+        <small><span class="inc">+{{ i.income|brl }}</span> <span class="exp">−{{ i.expense|brl }}</span></small>
+      </div>
+      <details class="more">
+        <summary aria-label="Ações da carteira">⋯</summary>
+        <div>
+          <a href="{{ url_for('index', mes=month.strftime('%Y-%m'), carteira=i.w.id) }}">Ver painel</a>
+          <a href="{{ url_for('transactions', mes=month.strftime('%Y-%m'), carteira=i.w.id) }}">Lançamentos</a>
+          <a href="{{ url_for('edit_wallet', wallet_id=i.w.id) }}">Editar</a>
+          <form method="post" action="{{ url_for('delete_wallet', wallet_id=i.w.id) }}" onsubmit="return confirm('Excluir esta carteira?')">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><button class="link danger">Excluir</button>
+          </form>
+        </div>
+      </details>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section>
+  <h2>Por tipo</h2>
+  <dl class="kinds">
+    {% for k, v in by_kind.items() %}<div><dt>{{ WALLET_KINDS[k] }}</dt><dd>{{ v|brl }}</dd></div>{% endfor %}
+  </dl>
+</section>
+
+<section>
+  <h2>Evolução do patrimônio</h2>
+  <div class="trend">
+    {% for m in trend %}
+    <div class="col" title="{{ m.value|brl }}">
+      <small>{{ m.value|brl if loop.last else '' }}</small>
+      <span class="bar {{ 'now' if loop.last }}" style="height: {{ ([m.value, 0]|max * 100 / trend_max)|round|int }}%"></span>
+      <small>{{ m.label }}</small>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section>
+  <h2>Transferências do mês</h2>
+  {% if transfers %}
+  <ul class="walletlist">
+    {% for t in transfers %}
+    <li>
+      <span class="dot" style="background: var(--line)"></span>
+      <div class="meta"><strong>{{ t.from_wallet.name }} → {{ t.to_wallet.name }}</strong>
+        <small>{{ t.description or 'Transferência' }} · {{ t.date.strftime('%d/%m') }}</small></div>
+      <span class="amt">{{ t.amount_cents|brl }}</span>
+      <form method="post" action="{{ url_for('delete_transfer', tr_id=t.id) }}" onsubmit="return confirm('Excluir esta transferência?')">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><button class="link danger">Excluir</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="empty">Nenhuma transferência neste mês.</p>{% endif %}
+</section>
+{% endblock %}

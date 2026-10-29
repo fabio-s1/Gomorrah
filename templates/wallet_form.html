@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · Gomorrah{% endblock %}
+{% block content %}
+<h1>{{ title }}</h1>
+<form method="post" class="form">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Nome
+    <input name="name" value="{{ v.name }}" maxlength="50" placeholder="Ex.: Conta Nubank, XP, VR" required autofocus>
+  </label>
+  <label>Tipo
+    <select name="kind">
+      {% for k, label in WALLET_KINDS.items() %}<option value="{{ k }}" {{ 'selected' if v.kind == k }}>{{ label }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Saldo inicial (R$)
+    <input name="opening" value="{{ v.opening }}" inputmode="decimal" placeholder="0,00">
+  </label>
+  <p class="muted">O saldo inicial é quanto havia na carteira antes do primeiro lançamento registrado aqui.</p>
+  <div class="row">
+    <button class="btn">Salvar carteira</button>
+    <a href="{{ url_for('wallets') }}">Cancelar</a>
+  </div>
+</form>
+{% endblock %}

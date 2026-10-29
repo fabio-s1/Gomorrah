@@ -2,7 +2,7 @@
 {% from "_macros.html" import monthnav, tx_list with context %}
 {% block title %}Lançamentos · Gomorrah{% endblock %}
 {% block content %}
-{{ monthnav('transactions', month, prev, next) }}
+{{ monthnav('transactions', month, prev, next, wid) }}
 <form method="get" class="filters">
   <input type="hidden" name="mes" value="{{ month.strftime('%Y-%m') }}">
   <input type="search" name="q" value="{{ term }}" placeholder="Buscar descrição" aria-label="Buscar descrição">
@@ -14,6 +14,10 @@
   <select name="categoria" aria-label="Categoria">
     <option value="">Todas as categorias</option>
     {% for c in categories %}<option value="{{ c.id }}" {{ 'selected' if cat == c.id|string }}>{{ c.name }}</option>{% endfor %}
+  </select>
+  <select name="carteira" aria-label="Carteira">
+    <option value="">Todas as carteiras</option>
+    {% for w in wlist %}<option value="{{ w.id }}" {{ 'selected' if wid == w.id }}>{{ w.name }}</option>{% endfor %}
   </select>
   <button class="btn">Filtrar</button>
 </form>

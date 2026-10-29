@@ -1,7 +1,11 @@
 {% extends "base.html" %}
 {% from "_macros.html" import monthnav, tx_list with context %}
 {% block content %}
-{{ monthnav('index', month, prev, next) }}
+{{ monthnav('index', month, prev, next, wid) }}
+<nav class="chips" aria-label="Carteira">
+  <a href="{{ url_for('index', mes=month.strftime('%Y-%m')) }}" {% if not wid %}aria-current="true"{% endif %}>Todas</a>
+  {% for w in wlist %}<a href="{{ url_for('index', mes=month.strftime('%Y-%m'), carteira=w.id) }}" {% if wid == w.id %}aria-current="true"{% endif %}>{{ w.name }}</a>{% endfor %}
+</nav>
 
 <section class="hero">
   <span class="eyebrow">Saldo do mês</span>
@@ -10,6 +14,10 @@
     <div><dt>Receitas</dt><dd class="inc">{{ income|brl }}</dd></div>
     <div><dt>Despesas</dt><dd class="exp">{{ expense|brl }}</dd></div>
   </dl>
+  <a class="line walletline" href="{{ url_for('wallets', mes=month.strftime('%Y-%m')) }}">
+    <span>{{ 'Saldo desta carteira' if wid else 'Patrimônio total' }}</span>
+    <strong>{{ wallet_balance|brl }} ›</strong>
+  </a>
   {% if total_budget %}
   <div class="budgetline">
     <div class="line"><span>Orçamento usado</span><span>{{ budget_pct }}% de {{ total_budget|brl }}</span></div>

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Transferir · Gomorrah{% endblock %}
+{% block content %}
+<h1>Transferir entre carteiras</h1>
+<p class="muted">Mover dinheiro entre suas carteiras não conta como receita nem despesa.</p>
+<form method="post" class="form">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>De
+    <select name="from" required>
+      <option value="">Escolha…</option>
+      {% for w in wlist %}<option value="{{ w.id }}" {{ 'selected' if v['from']|string == w.id|string }}>{{ w.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Para
+    <select name="to" required>
+      <option value="">Escolha…</option>
+      {% for w in wlist %}<option value="{{ w.id }}" {{ 'selected' if v['to']|string == w.id|string }}>{{ w.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Valor (R$)
+    <input name="amount" value="{{ v.amount }}" inputmode="decimal" placeholder="500,00" required>
+  </label>
+  <label>Data
+    <input type="date" name="date" value="{{ v.date }}" required>
+  </label>
+  <label>Descrição (opcional)
+    <input name="description" value="{{ v.description }}" maxlength="120" placeholder="Ex.: Aporte mensal">
+  </label>
+  <div class="row">
+    <button class="btn">Registrar transferência</button>
+    <a href="{{ url_for('wallets') }}">Cancelar</a>
+  </div>
+</form>
+{% endblock %}

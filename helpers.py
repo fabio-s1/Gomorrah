@@ -2,6 +2,9 @@ import re
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
+WALLET_KINDS = {"conta": "Conta bancária", "corretora": "Corretora / investimentos",
+                "beneficio": "Benefício (VR/VA)", "dinheiro": "Dinheiro", "outro": "Outro"}
+
 MONTHS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho",
           "agosto", "setembro", "outubro", "novembro", "dezembro"]
 

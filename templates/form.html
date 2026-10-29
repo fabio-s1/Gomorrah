@@ -18,6 +18,11 @@
   <label>Data
     <input type="date" name="date" value="{{ v.date }}" required>
   </label>
+  <label>Carteira
+    <select name="wallet_id" required>
+      {% for w in wlist %}<option value="{{ w.id }}" {{ 'selected' if v.wallet_id|string == w.id|string }}>{{ w.name }}</option>{% endfor %}
+    </select>
+  </label>
   <label>Categoria
     <select name="category_id">
       <option value="">Sem categoria</option>

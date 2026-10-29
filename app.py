@@ -8,10 +8,10 @@ from decimal import InvalidOperation
 
 from flask import (Flask, abort, flash, jsonify, redirect, render_template, request,
                    send_from_directory, session, url_for, Response)
-from sqlalchemy import func
+from sqlalchemy import func, text
 
-from helpers import MONTHS, brl, dec, month_bounds, parse_amount
-from models import Budget, Category, Transaction, db
+from helpers import MONTHS, WALLET_KINDS, brl, dec, month_bounds, parse_amount
+from models import Budget, Category, Transaction, Transfer, Wallet, db
 
 DEFAULT_CATEGORIES = ["Moradia", "Mercado", "Transporte", "Lazer",
                       "Saúde", "Educação", "Salário", "Outros"]
@@ -26,20 +26,37 @@ def ym(d):
     return d.strftime("%Y-%m")
 
 
-def totals(a, b):
-    rows = dict(db.session.query(Transaction.kind, func.sum(Transaction.amount_cents))
-                .filter(Transaction.date >= a, Transaction.date < b)
-                .group_by(Transaction.kind).all())
+def last_months(start, n=6):
+    months = [start]
+    for _ in range(n - 1):
+        months.insert(0, month_bounds(ym(months[0]))[2])
+    return months
+
+
+def wallet_arg():
+    """Lê ?carteira=<id> da URL; None se ausente ou inexistente."""
+    raw = request.args.get("carteira", "")
+    return int(raw) if raw.isdigit() and db.session.get(Wallet, int(raw)) else None
+
+
+def totals(a, b, wid=None):
+    q = (db.session.query(Transaction.kind, func.sum(Transaction.amount_cents))
+         .filter(Transaction.date >= a, Transaction.date < b))
+    if wid:
+        q = q.filter(Transaction.wallet_id == wid)
+    rows = dict(q.group_by(Transaction.kind).all())
     return rows.get("receita", 0), rows.get("despesa", 0)
 
 
-def category_rows(start, nxt):
-    """Gasto x orçamento de cada categoria no mês."""
-    spent = dict(db.session.query(Transaction.category_id, func.sum(Transaction.amount_cents))
-                 .filter(Transaction.kind == "despesa", Transaction.date >= start,
-                         Transaction.date < nxt)
-                 .group_by(Transaction.category_id).all())
-    budgets = {b.category_id: b.amount_cents for b in Budget.query.filter_by(month=ym(start))}
+def category_rows(start, nxt, wid=None):
+    """Gasto x orçamento de cada categoria no mês (orçamentos são globais)."""
+    q = (db.session.query(Transaction.category_id, func.sum(Transaction.amount_cents))
+         .filter(Transaction.kind == "despesa", Transaction.date >= start, Transaction.date < nxt))
+    if wid:
+        q = q.filter(Transaction.wallet_id == wid)
+    spent = dict(q.group_by(Transaction.category_id).all())
+    budgets = {} if wid else {b.category_id: b.amount_cents
+                              for b in Budget.query.filter_by(month=ym(start))}
     rows = []
     for c in Category.query.order_by(Category.name):
         s, b = spent.get(c.id, 0), budgets.get(c.id, 0)
@@ -50,16 +67,67 @@ def category_rows(start, nxt):
     return rows
 
 
-def trend(start, n=6):
-    months = [start]
-    for _ in range(n - 1):
-        months.insert(0, month_bounds(ym(months[0]))[2])
+def trend(start, n=6, wid=None):
+    months = last_months(start, n)
     key = func.strftime("%Y-%m", Transaction.date)
-    data = dict(db.session.query(key, func.sum(Transaction.amount_cents))
-                .filter(Transaction.kind == "despesa", Transaction.date >= months[0],
-                        Transaction.date < month_bounds(ym(start))[1])
-                .group_by(key).all())
+    q = (db.session.query(key, func.sum(Transaction.amount_cents))
+         .filter(Transaction.kind == "despesa", Transaction.date >= months[0],
+                 Transaction.date < month_bounds(ym(start))[1]))
+    if wid:
+        q = q.filter(Transaction.wallet_id == wid)
+    data = dict(q.group_by(key).all())
     return [{"label": MONTHS[m.month - 1][:3], "value": data.get(ym(m), 0)} for m in months]
+
+
+def wallet_balances(upto=None):
+    """Saldo de cada carteira (id -> centavos): inicial + receitas - despesas +/- transferências.
+    Com `upto`, considera só movimentos anteriores a essa data."""
+    bal = {w.id: w.opening_cents for w in Wallet.query}
+    q = (db.session.query(Transaction.wallet_id, Transaction.kind, func.sum(Transaction.amount_cents))
+         .group_by(Transaction.wallet_id, Transaction.kind))
+    if upto:
+        q = q.filter(Transaction.date < upto)
+    for wid, kind, total in q.all():
+        if wid in bal:
+            bal[wid] += total if kind == "receita" else -total
+    for col, sign in ((Transfer.from_wallet_id, -1), (Transfer.to_wallet_id, 1)):
+        q = db.session.query(col, func.sum(Transfer.amount_cents)).group_by(col)
+        if upto:
+            q = q.filter(Transfer.date < upto)
+        for wid, total in q.all():
+            if wid in bal:
+                bal[wid] += sign * total
+    return bal
+
+
+def month_flow_by_wallet(start, nxt):
+    flow = {}
+    rows = (db.session.query(Transaction.wallet_id, Transaction.kind, func.sum(Transaction.amount_cents))
+            .filter(Transaction.date >= start, Transaction.date < nxt)
+            .group_by(Transaction.wallet_id, Transaction.kind).all())
+    for wid, kind, total in rows:
+        flow.setdefault(wid, {})[kind] = total
+    return flow
+
+
+def networth_trend(start, n=6):
+    return [{"label": MONTHS[m.month - 1][:3],
+             "value": sum(wallet_balances(month_bounds(ym(m))[1]).values())}
+            for m in last_months(start, n)]
+
+
+def migrate_db():
+    """Atualiza bancos antigos: coluna wallet_id, carteira padrão e vínculo dos lançamentos."""
+    cols = [r[1] for r in db.session.execute(text('PRAGMA table_info("transaction")')).fetchall()]
+    if "wallet_id" not in cols:
+        db.session.execute(text('ALTER TABLE "transaction" ADD COLUMN wallet_id INTEGER REFERENCES wallet(id)'))
+        db.session.commit()
+    if Wallet.query.count() == 0:
+        db.session.add(Wallet(name="Carteira principal", kind="conta", opening_cents=0))
+        db.session.commit()
+    first = Wallet.query.order_by(Wallet.id).first()
+    Transaction.query.filter(Transaction.wallet_id.is_(None)).update({"wallet_id": first.id})
+    db.session.commit()
 
 
 def insights(rows, expense, prev_expense):
@@ -106,10 +174,12 @@ def create_app():
         if Category.query.count() == 0:
             db.session.add_all(Category(name=n) for n in DEFAULT_CATEGORIES)
             db.session.commit()
+        migrate_db()
 
     app.add_template_filter(brl, "brl")
     app.add_template_filter(dec, "dec")
     app.add_template_filter(lambda d: f"{MONTHS[d.month - 1]} de {d.year}", "mes_ano")
+    app.jinja_env.globals["WALLET_KINDS"] = WALLET_KINDS
 
     @app.before_request
     def guard():
@@ -171,26 +241,35 @@ def create_app():
     @app.route("/")
     def index():
         start, nxt, prev = month_bounds(request.args.get("mes"))
-        income, expense = totals(start, nxt)
-        prev_expense = totals(prev, start)[1]
-        rows = sorted((r for r in category_rows(start, nxt) if r["spent"] or r["budget"]),
+        wid = wallet_arg()
+        income, expense = totals(start, nxt, wid)
+        prev_expense = totals(prev, start, wid)[1]
+        rows = sorted((r for r in category_rows(start, nxt, wid) if r["spent"] or r["budget"]),
                       key=lambda r: -r["spent"])
         total_budget = sum(r["budget"] for r in rows)
-        series = trend(start)
-        recent = (Transaction.query.filter(Transaction.date >= start, Transaction.date < nxt)
-                  .order_by(Transaction.date.desc(), Transaction.id.desc()).limit(5).all())
+        series = trend(start, wid=wid)
+        q = Transaction.query.filter(Transaction.date >= start, Transaction.date < nxt)
+        if wid:
+            q = q.filter(Transaction.wallet_id == wid)
+        recent = q.order_by(Transaction.date.desc(), Transaction.id.desc()).limit(5).all()
+        balances = wallet_balances(nxt)
         return render_template(
             "index.html", month=start, prev=ym(prev), next=ym(nxt), income=income,
             expense=expense, balance=income - expense, rows=rows, total_budget=total_budget,
             budget_pct=round(expense * 100 / total_budget) if total_budget else 0,
             insights=insights(rows, expense, prev_expense), trend=series,
-            trend_max=max([m["value"] for m in series] + [1]), recent=recent)
+            trend_max=max([m["value"] for m in series] + [1]), recent=recent, wid=wid,
+            wlist=Wallet.query.order_by(Wallet.name).all(),
+            wallet_balance=balances[wid] if wid else sum(balances.values()))
 
     # ---------- Lançamentos ----------
     @app.route("/lancamentos")
     def transactions():
         start, nxt, prev = month_bounds(request.args.get("mes"))
+        wid = wallet_arg()
         q = Transaction.query.filter(Transaction.date >= start, Transaction.date < nxt)
+        if wid:
+            q = q.filter(Transaction.wallet_id == wid)
         term = request.args.get("q", "").strip()
         if term:
             q = q.filter(Transaction.description.ilike(f"%{term}%"))
@@ -203,15 +282,18 @@ def create_app():
         items = q.order_by(Transaction.date.desc(), Transaction.id.desc()).all()
         return render_template(
             "transactions.html", items=items, month=start, prev=ym(prev), next=ym(nxt),
-            term=term, kind=kind, cat=cat, categories=Category.query.order_by(Category.name).all(),
+            term=term, kind=kind, cat=cat, wid=wid, categories=Category.query.order_by(Category.name).all(),
+            wlist=Wallet.query.order_by(Wallet.name).all(),
             total=sum(t.amount_cents * (1 if t.kind == "receita" else -1) for t in items))
 
     def form_values(tx=None):
         if tx:
             return {"description": tx.description, "kind": tx.kind, "amount": dec(tx.amount_cents),
-                    "date": tx.date.isoformat(), "category_id": tx.category_id or ""}
-        return {"description": "", "kind": "despesa", "amount": "",
-                "date": date.today().isoformat(), "category_id": ""}
+                    "date": tx.date.isoformat(), "category_id": tx.category_id or "",
+                    "wallet_id": tx.wallet_id or ""}
+        first = Wallet.query.order_by(Wallet.id).first()
+        return {"description": "", "kind": "despesa", "amount": "", "date": date.today().isoformat(),
+                "category_id": "", "wallet_id": wallet_arg() or (first.id if first else "")}
 
     def save(tx):
         f, errors = request.form, []
@@ -229,12 +311,15 @@ def create_app():
             when = date.fromisoformat(f.get("date", ""))
         except ValueError:
             errors.append("Data inválida.")
-        cat_raw = f.get("category_id", "")
+        w_raw, cat_raw = f.get("wallet_id", ""), f.get("category_id", "")
+        wallet = db.session.get(Wallet, int(w_raw)) if w_raw.isdigit() else None
+        if not wallet:
+            errors.append("Escolha uma carteira.")
         category = db.session.get(Category, int(cat_raw)) if cat_raw.isdigit() else None
         if errors:
             return errors
         tx.description, tx.amount_cents, tx.kind = description[:120], cents, kind
-        tx.date, tx.category = when, category
+        tx.date, tx.category, tx.wallet = when, category, wallet
         db.session.add(tx)
         db.session.commit()
         return []
@@ -242,7 +327,8 @@ def create_app():
     def render_form(tx, title):
         values = form_values(tx) if request.method == "GET" else request.form
         return render_template("form.html", title=title, v=values,
-                               categories=Category.query.order_by(Category.name).all())
+                               categories=Category.query.order_by(Category.name).all(),
+                               wlist=Wallet.query.order_by(Wallet.name).all())
 
     @app.route("/lancamentos/novo", methods=["GET", "POST"])
     def new_transaction():
@@ -276,6 +362,136 @@ def create_app():
         db.session.commit()
         flash("Lançamento excluído.")
         return redirect(url_for("transactions", mes=month))
+
+    # ---------- Carteiras e transferências ----------
+    def save_wallet(w):
+        f, errors = request.form, []
+        name, kind = f.get("name", "").strip()[:50], f.get("kind")
+        if not name:
+            errors.append("Informe um nome para a carteira.")
+        elif Wallet.query.filter(func.lower(Wallet.name) == name.lower(), Wallet.id != (w.id or 0)).first():
+            errors.append("Já existe uma carteira com esse nome.")
+        if kind not in WALLET_KINDS:
+            errors.append("Tipo de carteira inválido.")
+        raw = f.get("opening", "").strip()
+        try:
+            opening = parse_amount(raw, allow_zero=True) if raw else 0
+        except (InvalidOperation, ValueError, OverflowError):
+            errors.append("Saldo inicial inválido. Use algo como 1500,00.")
+        if errors:
+            return errors
+        w.name, w.kind, w.opening_cents = name, kind, opening
+        db.session.add(w)
+        db.session.commit()
+        return []
+
+    @app.route("/carteiras")
+    def wallets():
+        start, nxt, prev = month_bounds(request.args.get("mes"))
+        balances, flow = wallet_balances(nxt), month_flow_by_wallet(start, nxt)
+        items = [{"w": w, "balance": balances[w.id], "income": flow.get(w.id, {}).get("receita", 0),
+                  "expense": flow.get(w.id, {}).get("despesa", 0)} for w in Wallet.query]
+        items.sort(key=lambda i: -i["balance"])
+        positive = sum(max(i["balance"], 0) for i in items)
+        by_kind = {}
+        for n, i in enumerate(items):
+            i["color"] = n % 8
+            i["width"] = max(i["balance"], 0) * 100 / positive if positive else 0
+            i["share"] = round(i["width"])
+            by_kind[i["w"].kind] = by_kind.get(i["w"].kind, 0) + i["balance"]
+        series = networth_trend(start)
+        transfers = (Transfer.query.filter(Transfer.date >= start, Transfer.date < nxt)
+                     .order_by(Transfer.date.desc(), Transfer.id.desc()).all())
+        return render_template(
+            "wallets.html", month=start, prev=ym(prev), next=ym(nxt), items=items, positive=positive,
+            total=sum(i["balance"] for i in items), by_kind=by_kind, trend=series,
+            trend_max=max([m["value"] for m in series] + [1]), transfers=transfers,
+            income=sum(i["income"] for i in items), expense=sum(i["expense"] for i in items))
+
+    def wallet_page(w, title):
+        values = request.form if request.method == "POST" else (
+            {"name": w.name, "kind": w.kind, "opening": dec(w.opening_cents)} if w.id else
+            {"name": "", "kind": "conta", "opening": ""})
+        return render_template("wallet_form.html", title=title, v=values, creating=not w.id)
+
+    @app.route("/carteiras/nova", methods=["GET", "POST"])
+    def new_wallet():
+        w = Wallet()
+        if request.method == "POST":
+            errors = save_wallet(w)
+            if not errors:
+                flash("Carteira criada.")
+                return redirect(url_for("wallets"))
+            for e in errors:
+                flash(e, "error")
+        return wallet_page(w, "Nova carteira")
+
+    @app.route("/carteiras/<int:wallet_id>/editar", methods=["GET", "POST"])
+    def edit_wallet(wallet_id):
+        w = db.session.get(Wallet, wallet_id) or abort(404)
+        if request.method == "POST":
+            errors = save_wallet(w)
+            if not errors:
+                flash("Carteira atualizada.")
+                return redirect(url_for("wallets"))
+            db.session.rollback()
+            for e in errors:
+                flash(e, "error")
+        return wallet_page(w, "Editar carteira")
+
+    @app.post("/carteiras/<int:wallet_id>/excluir")
+    def delete_wallet(wallet_id):
+        w = db.session.get(Wallet, wallet_id) or abort(404)
+        used = (Transaction.query.filter_by(wallet_id=w.id).count()
+                + Transfer.query.filter((Transfer.from_wallet_id == w.id) | (Transfer.to_wallet_id == w.id)).count())
+        if used:
+            flash("Essa carteira tem movimentações. Exclua ou mova-as antes.", "error")
+        elif Wallet.query.count() <= 1:
+            flash("Mantenha ao menos uma carteira.", "error")
+        else:
+            db.session.delete(w)
+            db.session.commit()
+            flash("Carteira excluída.")
+        return redirect(url_for("wallets"))
+
+    @app.route("/transferencias/nova", methods=["GET", "POST"])
+    def new_transfer():
+        if request.method == "POST":
+            f, errors = request.form, []
+            src = db.session.get(Wallet, int(f["from"])) if f.get("from", "").isdigit() else None
+            dst = db.session.get(Wallet, int(f["to"])) if f.get("to", "").isdigit() else None
+            if not src or not dst:
+                errors.append("Escolha as duas carteiras.")
+            elif src.id == dst.id:
+                errors.append("Origem e destino precisam ser diferentes.")
+            try:
+                cents = parse_amount(f.get("amount", ""))
+            except (InvalidOperation, ValueError, OverflowError):
+                errors.append("Valor inválido. Use algo como 500,00.")
+            try:
+                when = date.fromisoformat(f.get("date", ""))
+            except ValueError:
+                errors.append("Data inválida.")
+            if not errors:
+                db.session.add(Transfer(from_wallet=src, to_wallet=dst, amount_cents=cents, date=when,
+                                        description=f.get("description", "").strip()[:120]))
+                db.session.commit()
+                flash("Transferência registrada.")
+                return redirect(url_for("wallets", mes=ym(when)))
+            for e in errors:
+                flash(e, "error")
+        v = request.form if request.method == "POST" else {
+            "from": "", "to": "", "amount": "", "date": date.today().isoformat(), "description": ""}
+        return render_template("transfer_form.html", v=v, wlist=Wallet.query.order_by(Wallet.name).all())
+
+    @app.post("/transferencias/<int:tr_id>/excluir")
+    def delete_transfer(tr_id):
+        tr = db.session.get(Transfer, tr_id) or abort(404)
+        month = ym(tr.date)
+        db.session.delete(tr)
+        db.session.commit()
+        flash("Transferência excluída.")
+        return redirect(url_for("wallets", mes=month))
 
     # ---------- Orçamentos ----------
     @app.route("/orcamentos", methods=["GET", "POST"])
@@ -356,13 +572,20 @@ def create_app():
     @app.route("/dados/exportar.csv")
     def export_csv():
         out = io.StringIO()
-        w = csv.writer(out)
-        w.writerow(["tipo", "data", "valor", "categoria", "descricao"])
+        wr = csv.writer(out)
+        wr.writerow(["tipo", "data", "valor", "categoria", "descricao", "carteira", "destino"])
+        money = lambda c: f"{c / 100:.2f}"
+        for wl in Wallet.query.order_by(Wallet.id):
+            wr.writerow(["carteira", "", money(wl.opening_cents), "", wl.kind, wl.name, ""])
         for t in Transaction.query.order_by(Transaction.date, Transaction.id):
-            w.writerow([t.kind, t.date.isoformat(), f"{t.amount_cents / 100:.2f}",
-                        t.category.name if t.category else "", t.description])
+            wr.writerow([t.kind, t.date.isoformat(), money(t.amount_cents),
+                         t.category.name if t.category else "", t.description,
+                         t.wallet.name if t.wallet else "", ""])
+        for tr in Transfer.query.order_by(Transfer.date, Transfer.id):
+            wr.writerow(["transferencia", tr.date.isoformat(), money(tr.amount_cents), "",
+                         tr.description or "", tr.from_wallet.name, tr.to_wallet.name])
         for b in Budget.query.order_by(Budget.month):
-            w.writerow(["orcamento", f"{b.month}-01", f"{b.amount_cents / 100:.2f}", b.category.name, ""])
+            wr.writerow(["orcamento", f"{b.month}-01", money(b.amount_cents), b.category.name, "", "", ""])
         return Response("\ufeff" + out.getvalue(), mimetype="text/csv", headers={
             "Content-Disposition": f"attachment; filename=gomorrah-{date.today().isoformat()}.csv"})
 
@@ -373,17 +596,42 @@ def create_app():
             flash("Escolha um arquivo CSV.", "error")
             return redirect(url_for("settings"))
         try:
-            text = f.read().decode("utf-8-sig")
+            text_ = f.read().decode("utf-8-sig")
         except UnicodeDecodeError:
             flash("O arquivo precisa estar em UTF-8.", "error")
             return redirect(url_for("settings"))
         cats = {c.name.lower(): c for c in Category.query}
+        wallets_by = {w.name.lower(): w for w in Wallet.query}
+
+        def wallet_named(name):
+            name = name.strip()[:50]
+            if not name:
+                return Wallet.query.order_by(Wallet.id).first()
+            wl = wallets_by.get(name.lower())
+            if not wl:
+                wl = Wallet(name=name, kind="conta", opening_cents=0)
+                db.session.add(wl)
+                db.session.flush()
+                wallets_by[name.lower()] = wl
+            return wl
+
         ok, errors = 0, []
-        for n, row in enumerate(csv.DictReader(io.StringIO(text)), start=2):
+        for n, row in enumerate(csv.DictReader(io.StringIO(text_)), start=2):
             try:
                 kind = (row.get("tipo") or "").strip().lower()
-                if kind not in ("receita", "despesa", "orcamento"):
-                    raise Bad("tipo deve ser receita, despesa ou orcamento")
+                if kind not in ("receita", "despesa", "transferencia", "orcamento", "carteira"):
+                    raise Bad("tipo deve ser receita, despesa, transferencia, orcamento ou carteira")
+                w_name, w_dest = (row.get("carteira") or "").strip(), (row.get("destino") or "").strip()
+                if kind == "carteira":
+                    if not w_name:
+                        raise Bad("carteira sem nome")
+                    wl = wallet_named(w_name)
+                    wl.opening_cents = parse_amount(row.get("valor") or "", allow_zero=True)
+                    k = (row.get("descricao") or "").strip().lower()
+                    if k in WALLET_KINDS:
+                        wl.kind = k
+                    ok += 1
+                    continue
                 when = date.fromisoformat((row.get("data") or "").strip())
                 cents = parse_amount(row.get("valor") or "", allow_zero=kind == "orcamento")
                 name = (row.get("categoria") or "").strip()[:50]
@@ -403,12 +651,20 @@ def create_app():
                         b.amount_cents = cents
                     else:
                         db.session.add(Budget(category_id=cat.id, month=ym(when), amount_cents=cents))
+                elif kind == "transferencia":
+                    if not w_name or not w_dest:
+                        raise Bad("transferência precisa de carteira e destino")
+                    src, dst = wallet_named(w_name), wallet_named(w_dest)
+                    if src.id == dst.id:
+                        raise Bad("origem e destino iguais")
+                    db.session.add(Transfer(from_wallet=src, to_wallet=dst, amount_cents=cents, date=when,
+                                            description=(row.get("descricao") or "").strip()[:120]))
                 else:
                     desc = (row.get("descricao") or "").strip()
                     if not desc:
                         raise Bad("descrição vazia")
-                    db.session.add(Transaction(description=desc[:120], amount_cents=cents,
-                                               kind=kind, date=when, category=cat))
+                    db.session.add(Transaction(description=desc[:120], amount_cents=cents, kind=kind,
+                                               date=when, category=cat, wallet=wallet_named(w_name)))
                 ok += 1
             except Bad as e:
                 errors.append(f"linha {n}: {e}")

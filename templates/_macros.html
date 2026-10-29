@@ -1,8 +1,8 @@
-{% macro monthnav(endpoint, month, prev, next) %}
+{% macro monthnav(endpoint, month, prev, next, wid=None) %}
 <div class="monthnav">
-  <a href="{{ url_for(endpoint, mes=prev) }}" aria-label="Mês anterior">‹</a>
+  <a href="{{ url_for(endpoint, mes=prev, carteira=wid) }}" aria-label="Mês anterior">‹</a>
   <h1>{{ month|mes_ano }}</h1>
-  <a href="{{ url_for(endpoint, mes=next) }}" aria-label="Próximo mês">›</a>
+  <a href="{{ url_for(endpoint, mes=next, carteira=wid) }}" aria-label="Próximo mês">›</a>
 </div>
 {% endmacro %}
 
@@ -14,7 +14,7 @@
     <span class="avatar">{{ (t.category.name[0] if t.category else '·')|upper }}</span>
     <div class="meta">
       <strong>{{ t.description }}</strong>
-      <small>{{ t.category.name if t.category else 'Sem categoria' }} · {{ t.date.strftime('%d/%m') }}</small>
+      <small>{{ t.category.name if t.category else 'Sem categoria' }} · {{ t.wallet.name if t.wallet else '—' }} · {{ t.date.strftime('%d/%m') }}</small>
     </div>
     <span class="amt {{ 'inc' if t.kind == 'receita' else 'exp' }}">{{ '+' if t.kind == 'receita' else '−' }} {{ t.amount_cents|brl }}</span>
     <details class="more">

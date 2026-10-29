@@ -10,6 +10,7 @@ Funciona no navegador do PC e pode ser instalada no celular como app (PWA).
 - **Lançamentos:** cadastro, edição e exclusão, com busca e filtros por tipo e categoria
 - **Orçamento por categoria e mês:** barra verde/amarela (a partir de 80%)/vermelha (acima de 100%) e cópia do mês anterior
 - **Categorias** personalizáveis
+- **Carteiras:** várias "contas" separadas (banco, corretora, VR/VA, dinheiro), transferências entre elas, painel de patrimônio com distribuição, evolução e filtro por carteira em todo o painel
 - **CSV:** exportar e importar lançamentos e orçamentos, com relatório de erros por linha
 - **Segurança:** login por senha opcional e proteção CSRF em todos os formulários
 - **Mobile-first:** barra de abas, botão "+" e interface adaptada; instalável como app
@@ -74,12 +75,24 @@ Servidor 24/7 (Raspberry Pi, VPS): use Gunicorn em vez do servidor de desenvolvi
 `pip install gunicorn && gunicorn --preload -w 2 -b 127.0.0.1:8000 app:app`.
 Nunca use `--debug` fora do seu computador de desenvolvimento.
 
+## Carteiras e patrimônio
+
+Cada **carteira** é um dinheiro separado: conta bancária, corretora, benefício (VR/VA), dinheiro vivo ou outro.
+
+- **Saldo da carteira** = saldo inicial + receitas − despesas + transferências recebidas − transferências enviadas.
+- **Transferências** movem dinheiro entre carteiras (ex.: conta → corretora) e **não contam como receita nem despesa**, então não distorcem o resultado do mês.
+- **Patrimônio total** (`/carteiras`) soma os saldos ao fim do mês escolhido, mostra a distribuição, o saldo por tipo e a evolução de 6 meses.
+- O **Painel** pode ser filtrado por carteira (chips no topo). Orçamentos são globais: no filtro por carteira, os gastos aparecem "sem orçamento".
+- **Investimentos:** registre aportes como transferência e rendimentos como receita na carteira da corretora. O saldo **não acompanha a cotação** dos ativos.
+
+**Atualizando de uma versão sem carteiras:** ao iniciar, `migrate_db()` (em `app.py`) adiciona a coluna `wallet_id`, cria a "Carteira principal" e vincula a ela todos os lançamentos antigos. Faça backup de `instance/gomorrah.db` antes. Esse é o padrão a seguir quando precisar adicionar colunas a um banco já existente.
+
 ## Estrutura do projeto
 
 ```
 Gomorrah/
 ├── app.py              # app Flask: rotas, login, CSRF, PWA, CSV, consultas
-├── models.py           # tabelas: Category, Transaction, Budget
+├── models.py           # tabelas: Category, Wallet, Transaction, Transfer, Budget
 ├── helpers.py          # funções puras: moeda (brl), meses, leitura de valores
 ├── requirements.txt    # dependências Python
 ├── README.md
@@ -92,6 +105,7 @@ Gomorrah/
 │   ├── base.html       # layout: cabeçalho, abas, menu, botão "+"
 │   ├── _macros.html    # pedaços reutilizáveis: navegação de mês, lista de lançamentos
 │   ├── index.html      # painel
+│   ├── wallets.html, wallet_form.html, transfer_form.html   # carteiras e patrimônio
 │   ├── transactions.html, form.html, budgets.html, settings.html
 │   └── login.html, offline.html
 └── instance/           # CRIADA AO RODAR. Dados privados, nunca versionada
@@ -121,6 +135,8 @@ Decisões importantes:
 | `/` | Painel do mês |
 | `/lancamentos` · `/lancamentos/novo` · `/lancamentos/<id>/editar` · `/lancamentos/<id>/excluir` | Lista, cria, edita, exclui |
 | `/orcamentos` · `/orcamentos/copiar` | Define e copia orçamentos do mês |
+| `/carteiras` · `/carteiras/nova` · `/carteiras/<id>/editar` · `/carteiras/<id>/excluir` | Patrimônio e gestão das carteiras |
+| `/transferencias/nova` · `/transferencias/<id>/excluir` | Transferências entre carteiras |
 | `/ajustes` · `/categorias` · `/categorias/<id>/excluir` | Categorias, dados e conta |
 | `/dados/exportar.csv` · `/dados/importar` | Backup e migração em CSV |
 | `/entrar` · `/sair` | Login e logout |
@@ -131,13 +147,23 @@ Decisões importantes:
 | Tabela | Campos |
 |---|---|
 | `category` | `id`, `name` (único) |
-| `transaction` | `id`, `description`, `amount_cents`, `kind` (`receita`/`despesa`), `date`, `category_id` |
+| `wallet` | `id`, `name` (único), `kind`, `opening_cents` (saldo inicial) |
+| `transaction` | `id`, `description`, `amount_cents`, `kind` (`receita`/`despesa`), `date`, `category_id`, `wallet_id` |
+| `transfer` | `id`, `description`, `amount_cents`, `date`, `from_wallet_id`, `to_wallet_id` |
 | `budget` | `id`, `category_id`, `month` (`AAAA-MM`), `amount_cents` (único por categoria+mês) |
 
 ### Formato do CSV
 
-Cabeçalho `tipo,data,valor,categoria,descricao`. `tipo` = `receita`, `despesa` ou `orcamento`
-(orçamento usa o mês da data); `data` em `AAAA-MM-DD`; `valor` aceita `49.90`, `49,90` ou `1.234,56`.
+Cabeçalho: `tipo,data,valor,categoria,descricao,carteira,destino`. Os valores aceitos em `tipo`:
+
+| tipo | Campos usados |
+|---|---|
+| `carteira` | `carteira` = nome, `valor` = saldo inicial, `descricao` = tipo (`conta`, `corretora`, `beneficio`, `dinheiro`, `outro`) |
+| `receita` / `despesa` | `data`, `valor`, `categoria`, `descricao`, `carteira` (vazio = primeira carteira) |
+| `transferencia` | `data`, `valor`, `descricao`, `carteira` = origem, `destino` |
+| `orcamento` | `data` (só o mês importa), `valor`, `categoria` |
+
+`data` em `AAAA-MM-DD`; `valor` aceita `49.90`, `49,90` ou `1.234,56`. Carteiras citadas que não existem são criadas. CSVs antigos (sem as colunas `carteira` e `destino`) continuam funcionando.
 
 ## Manutenção
 
