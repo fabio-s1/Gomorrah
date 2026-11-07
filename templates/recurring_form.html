@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · Gomorrah{% endblock %}
+{% block content %}
+<h1>{{ title }}</h1>
+<form method="post" class="form">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <fieldset class="kind">
+    <legend>Tipo</legend>
+    <label><input type="radio" name="kind" value="despesa" {{ 'checked' if v.kind != 'receita' }}> Despesa</label>
+    <label><input type="radio" name="kind" value="receita" {{ 'checked' if v.kind == 'receita' }}> Receita</label>
+  </fieldset>
+  <label>Descrição
+    <input name="description" value="{{ v.description }}" maxlength="120" placeholder="Ex.: Aluguel, Salário, Netflix" required autofocus>
+  </label>
+  <label>Valor (R$)
+    <input name="amount" value="{{ v.amount }}" inputmode="decimal" placeholder="1200,00" required>
+  </label>
+  <label>Carteira
+    <select name="wallet_id" required>
+      {% for w in wlist %}<option value="{{ w.id }}" {{ 'selected' if v.wallet_id|string == w.id|string }}>{{ w.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Categoria
+    <select name="category_id">
+      <option value="">Sem categoria</option>
+      {% for c in categories %}<option value="{{ c.id }}" {{ 'selected' if v.category_id|string == c.id|string }}>{{ c.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Dia do mês
+    <input type="number" name="day" value="{{ v.day }}" min="1" max="31" inputmode="numeric" required>
+  </label>
+  <p class="muted">Dia 31 vira o último dia dos meses mais curtos.</p>
+  <label>Começa em
+    <input type="date" name="start" value="{{ v.start }}" required>
+  </label>
+  <p class="muted">O primeiro vencimento é o dia escolhido a partir desta data. Se for uma data passada, os meses anteriores serão criados de uma vez.</p>
+  <label>Termina em (opcional)
+    <input type="date" name="end" value="{{ v.end }}">
+  </label>
+  <div class="row">
+    <button class="btn">Salvar recorrente</button>
+    <a href="{{ url_for('recurrings') }}">Cancelar</a>
+  </div>
+</form>
+{% endblock %}

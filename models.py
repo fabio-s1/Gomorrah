@@ -50,3 +50,29 @@ class Budget(db.Model):
     month = db.Column(db.String(7), nullable=False)
     amount_cents = db.Column(db.Integer, nullable=False)
     category = db.relationship("Category")
+
+
+class Recurring(db.Model):
+    """Lançamento mensal fixo: gera um lançamento real a cada vencimento (ver generate_recurring)."""
+    id = db.Column(db.Integer, primary_key=True)
+    description = db.Column(db.String(120), nullable=False)
+    amount_cents = db.Column(db.Integer, nullable=False)
+    kind = db.Column(db.String(7), nullable=False)  # "receita" ou "despesa"
+    day = db.Column(db.Integer, nullable=False)  # dia do mês (1-31)
+    next_due = db.Column(db.Date, nullable=False)  # próximo vencimento ainda não gerado
+    end_date = db.Column(db.Date)
+    active = db.Column(db.Boolean, nullable=False, default=True)
+    category_id = db.Column(db.Integer, db.ForeignKey("category.id"))
+    category = db.relationship("Category")
+    wallet_id = db.Column(db.Integer, db.ForeignKey("wallet.id"), nullable=False)
+    wallet = db.relationship("Wallet")
+
+
+class Goal(db.Model):
+    """Meta de economia: o progresso é o saldo da carteira vinculada."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(60), nullable=False)
+    target_cents = db.Column(db.Integer, nullable=False)
+    deadline = db.Column(db.Date)
+    wallet_id = db.Column(db.Integer, db.ForeignKey("wallet.id"), nullable=False)
+    wallet = db.relationship("Wallet")

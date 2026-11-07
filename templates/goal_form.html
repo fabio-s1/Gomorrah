@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · Gomorrah{% endblock %}
+{% block content %}
+<h1>{{ title }}</h1>
+<form method="post" class="form">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Nome da meta
+    <input name="name" value="{{ v.name }}" maxlength="60" placeholder="Ex.: Reserva de emergência" required autofocus>
+  </label>
+  <label>Valor da meta (R$)
+    <input name="target" value="{{ v.target }}" inputmode="decimal" placeholder="20000,00" required>
+  </label>
+  <label>Carteira onde o dinheiro fica
+    <select name="wallet_id" required>
+      <option value="">Escolha…</option>
+      {% for w in wlist %}<option value="{{ w.id }}" {{ 'selected' if v.wallet_id|string == w.id|string }}>{{ w.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <p class="muted">Use uma carteira só para esta meta. Se duas metas usarem a mesma carteira, ambas contarão o saldo inteiro.</p>
+  <label>Prazo (opcional)
+    <input type="date" name="deadline" value="{{ v.deadline }}">
+  </label>
+  <div class="row">
+    <button class="btn">Salvar meta</button>
+    <a href="{{ url_for('goals') }}">Cancelar</a>
+  </div>
+</form>
+{% endblock %}

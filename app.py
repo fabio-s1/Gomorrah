@@ -10,8 +10,9 @@ from flask import (Flask, abort, flash, jsonify, redirect, render_template, requ
                    send_from_directory, session, url_for, Response)
 from sqlalchemy import func, text
 
-from helpers import MONTHS, WALLET_KINDS, brl, dec, month_bounds, parse_amount
-from models import Budget, Category, Transaction, Transfer, Wallet, db
+from helpers import (MONTHS, WALLET_KINDS, add_month, brl, clamp_day, dec, month_bounds,
+                     monthly_needed, months_until, parse_amount, pending_dues)
+from models import Budget, Category, Goal, Recurring, Transaction, Transfer, Wallet, db
 
 DEFAULT_CATEGORIES = ["Moradia", "Mercado", "Transporte", "Lazer",
                       "Saúde", "Educação", "Salário", "Outros"]
@@ -150,6 +151,30 @@ def insights(rows, expense, prev_expense):
     return out[:3]
 
 
+_state = {"day": None}  # evita refazer a verificação dos recorrentes mais de uma vez por dia
+
+
+def generate_recurring():
+    """Cria os lançamentos dos recorrentes cujo vencimento já chegou. Idempotente: o vencimento é
+    "reivindicado" com um UPDATE condicional, então dois processos nunca geram o mesmo lançamento."""
+    today = date.today()
+    if _state["day"] == today:
+        return
+    for r in Recurring.query.filter_by(active=True).all():
+        dues, nxt, finished = pending_dues(r.next_due, r.day, today, r.end_date)
+        if not dues and not finished:
+            continue
+        claimed = (Recurring.query.filter_by(id=r.id, next_due=r.next_due)
+                   .update({"next_due": nxt, "active": not finished}))
+        if claimed:
+            for due in dues:
+                db.session.add(Transaction(description=r.description, amount_cents=r.amount_cents,
+                                           kind=r.kind, date=due, category_id=r.category_id,
+                                           wallet_id=r.wallet_id))
+        db.session.commit()
+    _state["day"] = today
+
+
 def create_app():
     app = Flask(__name__)
     os.makedirs(app.instance_path, exist_ok=True)
@@ -189,6 +214,8 @@ def create_app():
                 abort(400)
         if password and not session.get("auth") and request.endpoint not in PUBLIC:
             return redirect(url_for("login", next=request.path))
+        if request.endpoint not in PUBLIC:
+            generate_recurring()
 
     @app.context_processor
     def inject():
@@ -443,9 +470,10 @@ def create_app():
     def delete_wallet(wallet_id):
         w = db.session.get(Wallet, wallet_id) or abort(404)
         used = (Transaction.query.filter_by(wallet_id=w.id).count()
-                + Transfer.query.filter((Transfer.from_wallet_id == w.id) | (Transfer.to_wallet_id == w.id)).count())
+                + Transfer.query.filter((Transfer.from_wallet_id == w.id) | (Transfer.to_wallet_id == w.id)).count()
+                + Recurring.query.filter_by(wallet_id=w.id).count() + Goal.query.filter_by(wallet_id=w.id).count())
         if used:
-            flash("Essa carteira tem movimentações. Exclua ou mova-as antes.", "error")
+            flash("Essa carteira tem movimentações, recorrentes ou metas vinculados.", "error")
         elif Wallet.query.count() <= 1:
             flash("Mantenha ao menos uma carteira.", "error")
         else:
@@ -481,7 +509,8 @@ def create_app():
             for e in errors:
                 flash(e, "error")
         v = request.form if request.method == "POST" else {
-            "from": "", "to": "", "amount": "", "date": date.today().isoformat(), "description": ""}
+            "from": request.args.get("de", ""), "to": request.args.get("para", ""), "amount": "",
+            "date": date.today().isoformat(), "description": ""}
         return render_template("transfer_form.html", v=v, wlist=Wallet.query.order_by(Wallet.name).all())
 
     @app.post("/transferencias/<int:tr_id>/excluir")
@@ -492,6 +521,206 @@ def create_app():
         db.session.commit()
         flash("Transferência excluída.")
         return redirect(url_for("wallets", mes=month))
+
+    # ---------- Recorrentes ----------
+    def recurring_values(r=None):
+        if r:
+            return {"description": r.description, "kind": r.kind, "amount": dec(r.amount_cents),
+                    "wallet_id": r.wallet_id, "category_id": r.category_id or "", "day": r.day,
+                    "start": r.next_due.isoformat(), "end": r.end_date.isoformat() if r.end_date else ""}
+        first = Wallet.query.order_by(Wallet.id).first()
+        return {"description": "", "kind": "despesa", "amount": "", "wallet_id": first.id if first else "",
+                "category_id": "", "day": date.today().day, "start": date.today().isoformat(), "end": ""}
+
+    def save_recurring(r):
+        f, errors = request.form, []
+        description = f.get("description", "").strip()
+        if not description:
+            errors.append("Informe uma descrição.")
+        try:
+            cents = parse_amount(f.get("amount", ""))
+        except (InvalidOperation, ValueError, OverflowError):
+            errors.append("Valor inválido. Use algo como 1200,00.")
+        kind = f.get("kind")
+        if kind not in ("receita", "despesa"):
+            errors.append("Escolha receita ou despesa.")
+        day = f.get("day", "")
+        if not (day.isdigit() and 1 <= int(day) <= 31):
+            errors.append("O dia do mês deve estar entre 1 e 31.")
+        try:
+            start = date.fromisoformat(f.get("start", ""))
+        except ValueError:
+            errors.append("Data inicial inválida.")
+        end = None
+        if f.get("end"):
+            try:
+                end = date.fromisoformat(f["end"])
+            except ValueError:
+                errors.append("Data final inválida.")
+        w_raw, c_raw = f.get("wallet_id", ""), f.get("category_id", "")
+        wallet = db.session.get(Wallet, int(w_raw)) if w_raw.isdigit() else None
+        if not wallet:
+            errors.append("Escolha uma carteira.")
+        category = db.session.get(Category, int(c_raw)) if c_raw.isdigit() else None
+        if errors:
+            return errors
+        if end and end < start:
+            return ["A data final deve ser depois da inicial."]
+        due = clamp_day(start.year, start.month, int(day))
+        if due < start:
+            due = add_month(due, int(day))
+        r.description, r.amount_cents, r.kind, r.day = description[:120], cents, kind, int(day)
+        r.next_due, r.end_date, r.wallet, r.category = due, end, wallet, category
+        if r.id is None:
+            r.active = True
+        db.session.add(r)
+        db.session.commit()
+        _state["day"] = None  # gera já o que estiver vencido
+        return []
+
+    def recurring_page(r, title):
+        values = request.form if request.method == "POST" else recurring_values(r if r.id else None)
+        return render_template("recurring_form.html", title=title, v=values,
+                               categories=Category.query.order_by(Category.name).all(),
+                               wlist=Wallet.query.order_by(Wallet.name).all())
+
+    @app.route("/recorrentes")
+    def recurrings():
+        items = Recurring.query.order_by(Recurring.description).all()
+        active = [r for r in items if r.active]
+        month_end = month_bounds(None)[1]
+        sign = lambda r: r.amount_cents if r.kind == "receita" else -r.amount_cents
+        return render_template(
+            "recurrings.html", items=items,
+            inc=sum(r.amount_cents for r in active if r.kind == "receita"),
+            exp=sum(r.amount_cents for r in active if r.kind == "despesa"),
+            pending=sum(sign(r) for r in active if r.next_due < month_end))
+
+    @app.route("/recorrentes/novo", methods=["GET", "POST"])
+    def new_recurring():
+        r = Recurring()
+        if request.method == "POST":
+            errors = save_recurring(r)
+            if not errors:
+                flash("Recorrente criado.")
+                return redirect(url_for("recurrings"))
+            for e in errors:
+                flash(e, "error")
+        return recurring_page(r, "Novo recorrente")
+
+    @app.route("/recorrentes/<int:rec_id>/editar", methods=["GET", "POST"])
+    def edit_recurring(rec_id):
+        r = db.session.get(Recurring, rec_id) or abort(404)
+        if request.method == "POST":
+            errors = save_recurring(r)
+            if not errors:
+                flash("Recorrente atualizado.")
+                return redirect(url_for("recurrings"))
+            db.session.rollback()
+            for e in errors:
+                flash(e, "error")
+        return recurring_page(r, "Editar recorrente")
+
+    @app.post("/recorrentes/<int:rec_id>/alternar")
+    def toggle_recurring(rec_id):
+        r = db.session.get(Recurring, rec_id) or abort(404)
+        r.active = not r.active
+        if r.active:  # ao retomar, não gera o que venceu durante a pausa
+            while r.next_due < date.today():
+                r.next_due = add_month(r.next_due, r.day)
+        db.session.commit()
+        flash("Recorrente retomado." if r.active else "Recorrente pausado.")
+        return redirect(url_for("recurrings"))
+
+    @app.post("/recorrentes/<int:rec_id>/excluir")
+    def delete_recurring(rec_id):
+        r = db.session.get(Recurring, rec_id) or abort(404)
+        db.session.delete(r)
+        db.session.commit()
+        flash("Recorrente excluído. Os lançamentos já criados foram mantidos.")
+        return redirect(url_for("recurrings"))
+
+    # ---------- Metas de economia ----------
+    def save_goal(g):
+        f, errors = request.form, []
+        name = f.get("name", "").strip()[:60]
+        if not name:
+            errors.append("Informe um nome para a meta.")
+        try:
+            target = parse_amount(f.get("target", ""))
+        except (InvalidOperation, ValueError, OverflowError):
+            errors.append("Valor da meta inválido. Use algo como 20000,00.")
+        w_raw = f.get("wallet_id", "")
+        wallet = db.session.get(Wallet, int(w_raw)) if w_raw.isdigit() else None
+        if not wallet:
+            errors.append("Escolha a carteira onde o dinheiro será guardado.")
+        deadline = None
+        if f.get("deadline"):
+            try:
+                deadline = date.fromisoformat(f["deadline"])
+            except ValueError:
+                errors.append("Prazo inválido.")
+        if errors:
+            return errors
+        g.name, g.target_cents, g.wallet, g.deadline = name, target, wallet, deadline
+        db.session.add(g)
+        db.session.commit()
+        return []
+
+    def goal_page(g, title):
+        values = request.form if request.method == "POST" else (
+            {"name": g.name, "target": dec(g.target_cents), "wallet_id": g.wallet_id,
+             "deadline": g.deadline.isoformat() if g.deadline else ""} if g.id else
+            {"name": "", "target": "", "wallet_id": "", "deadline": ""})
+        return render_template("goal_form.html", title=title, v=values,
+                               wlist=Wallet.query.order_by(Wallet.name).all())
+
+    @app.route("/metas")
+    def goals():
+        today, bal, items = date.today(), wallet_balances(), []
+        for g in Goal.query.order_by(Goal.name):
+            saved = max(bal.get(g.wallet_id, 0), 0)
+            remaining = max(g.target_cents - saved, 0)
+            late = bool(g.deadline and g.deadline < today and remaining)
+            running = bool(g.deadline and not late and remaining)
+            items.append({"g": g, "saved": saved, "remaining": remaining, "done": remaining == 0,
+                          "late": late, "pct": min(round(saved * 100 / g.target_cents), 100),
+                          "months": months_until(g.deadline, today) if running else 0,
+                          "per_month": monthly_needed(remaining, g.deadline, today) if running else 0})
+        return render_template("goals.html", items=items)
+
+    @app.route("/metas/nova", methods=["GET", "POST"])
+    def new_goal():
+        g = Goal()
+        if request.method == "POST":
+            errors = save_goal(g)
+            if not errors:
+                flash("Meta criada.")
+                return redirect(url_for("goals"))
+            for e in errors:
+                flash(e, "error")
+        return goal_page(g, "Nova meta")
+
+    @app.route("/metas/<int:goal_id>/editar", methods=["GET", "POST"])
+    def edit_goal(goal_id):
+        g = db.session.get(Goal, goal_id) or abort(404)
+        if request.method == "POST":
+            errors = save_goal(g)
+            if not errors:
+                flash("Meta atualizada.")
+                return redirect(url_for("goals"))
+            db.session.rollback()
+            for e in errors:
+                flash(e, "error")
+        return goal_page(g, "Editar meta")
+
+    @app.post("/metas/<int:goal_id>/excluir")
+    def delete_goal(goal_id):
+        g = db.session.get(Goal, goal_id) or abort(404)
+        db.session.delete(g)
+        db.session.commit()
+        flash("Meta excluída.")
+        return redirect(url_for("goals"))
 
     # ---------- Orçamentos ----------
     @app.route("/orcamentos", methods=["GET", "POST"])
@@ -560,7 +789,7 @@ def create_app():
     @app.post("/categorias/<int:cat_id>/excluir")
     def delete_category(cat_id):
         cat = db.session.get(Category, cat_id) or abort(404)
-        if Transaction.query.filter_by(category_id=cat.id).count():
+        if Transaction.query.filter_by(category_id=cat.id).count() or Recurring.query.filter_by(category_id=cat.id).count():
             flash("Essa categoria tem lançamentos. Mude-os de categoria antes de excluir.", "error")
         else:
             Budget.query.filter_by(category_id=cat.id).delete()

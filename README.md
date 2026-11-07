@@ -8,6 +8,8 @@ Funciona no navegador do PC e pode ser instalada no celular como app (PWA).
 
 - **Painel mensal:** saldo, receitas, despesas, uso do orçamento, insights em linguagem simples, gastos por categoria e tendência de 6 meses
 - **Lançamentos:** cadastro, edição e exclusão, com busca e filtros por tipo e categoria
+- **Metas de economia:** objetivo com valor e prazo ligado a uma carteira, com progresso e quanto guardar por mês
+- **Lançamentos recorrentes:** aluguel, salário, assinaturas: o lançamento é criado sozinho no dia do vencimento
 - **Orçamento por categoria e mês:** barra verde/amarela (a partir de 80%)/vermelha (acima de 100%) e cópia do mês anterior
 - **Categorias** personalizáveis
 - **Carteiras:** várias "contas" separadas (banco, corretora, VR/VA, dinheiro), transferências entre elas, painel de patrimônio com distribuição, evolução e filtro por carteira em todo o painel
@@ -87,12 +89,20 @@ Cada **carteira** é um dinheiro separado: conta bancária, corretora, benefíci
 
 **Atualizando de uma versão sem carteiras:** ao iniciar, `migrate_db()` (em `app.py`) adiciona a coluna `wallet_id`, cria a "Carteira principal" e vincula a ela todos os lançamentos antigos. Faça backup de `instance/gomorrah.db` antes. Esse é o padrão a seguir quando precisar adicionar colunas a um banco já existente.
 
+## Planejamento: metas e recorrentes
+
+A aba **Planejar** reúne Orçamentos, Metas e Recorrentes.
+
+- **Recorrentes:** cadastre descrição, valor, carteira, categoria e dia do mês. Na primeira vez que o app é aberto a partir do vencimento, `generate_recurring()` (em `app.py`) cria o lançamento real e agenda o próximo mês. Dia 31 vira o último dia dos meses curtos. Excluir um recorrente mantém os lançamentos já criados; pausar e retomar não gera o que venceu durante a pausa.
+- **Metas:** o progresso é o **saldo da carteira vinculada**. Crie uma carteira por objetivo (ex.: "Reserva de emergência") e use "Guardar dinheiro" para transferir até ela. Com prazo, o app mostra quanto guardar por mês.
+- **CSV:** a exportação não inclui recorrentes nem metas. Para migrar tudo, copie `instance/gomorrah.db`.
+
 ## Estrutura do projeto
 
 ```
 Gomorrah/
 ├── app.py              # app Flask: rotas, login, CSRF, PWA, CSV, consultas
-├── models.py           # tabelas: Category, Wallet, Transaction, Transfer, Budget
+├── models.py           # tabelas: Category, Wallet, Transaction, Transfer, Budget, Recurring, Goal
 ├── helpers.py          # funções puras: moeda (brl), meses, leitura de valores
 ├── requirements.txt    # dependências Python
 ├── README.md
@@ -106,6 +116,7 @@ Gomorrah/
 │   ├── _macros.html    # pedaços reutilizáveis: navegação de mês, lista de lançamentos
 │   ├── index.html      # painel
 │   ├── wallets.html, wallet_form.html, transfer_form.html   # carteiras e patrimônio
+│   ├── goals.html, goal_form.html, recurrings.html, recurring_form.html   # planejamento
 │   ├── transactions.html, form.html, budgets.html, settings.html
 │   └── login.html, offline.html
 └── instance/           # CRIADA AO RODAR. Dados privados, nunca versionada
@@ -137,6 +148,8 @@ Decisões importantes:
 | `/orcamentos` · `/orcamentos/copiar` | Define e copia orçamentos do mês |
 | `/carteiras` · `/carteiras/nova` · `/carteiras/<id>/editar` · `/carteiras/<id>/excluir` | Patrimônio e gestão das carteiras |
 | `/transferencias/nova` · `/transferencias/<id>/excluir` | Transferências entre carteiras |
+| `/metas` · `/metas/nova` · `/metas/<id>/editar` · `/metas/<id>/excluir` | Metas de economia |
+| `/recorrentes` · `/recorrentes/novo` · `/recorrentes/<id>/editar` · `/recorrentes/<id>/alternar` · `/recorrentes/<id>/excluir` | Lançamentos recorrentes |
 | `/ajustes` · `/categorias` · `/categorias/<id>/excluir` | Categorias, dados e conta |
 | `/dados/exportar.csv` · `/dados/importar` | Backup e migração em CSV |
 | `/entrar` · `/sair` | Login e logout |
@@ -150,6 +163,8 @@ Decisões importantes:
 | `wallet` | `id`, `name` (único), `kind`, `opening_cents` (saldo inicial) |
 | `transaction` | `id`, `description`, `amount_cents`, `kind` (`receita`/`despesa`), `date`, `category_id`, `wallet_id` |
 | `transfer` | `id`, `description`, `amount_cents`, `date`, `from_wallet_id`, `to_wallet_id` |
+| `recurring` | `id`, `description`, `amount_cents`, `kind`, `day`, `next_due`, `end_date`, `active`, `category_id`, `wallet_id` |
+| `goal` | `id`, `name`, `target_cents`, `deadline`, `wallet_id` |
 | `budget` | `id`, `category_id`, `month` (`AAAA-MM`), `amount_cents` (único por categoria+mês) |
 
 ### Formato do CSV

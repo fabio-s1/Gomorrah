@@ -34,3 +34,11 @@
 <p class="empty">Nenhum lançamento.</p>
 {% endif %}
 {% endmacro %}
+
+{% macro subnav(active) %}
+<nav class="subnav" aria-label="Planejamento">
+  <a href="{{ url_for('budgets') }}" {% if active == 'budgets' %}aria-current="page"{% endif %}>Orçamentos</a>
+  <a href="{{ url_for('goals') }}" {% if active == 'goals' %}aria-current="page"{% endif %}>Metas</a>
+  <a href="{{ url_for('recurrings') }}" {% if active == 'recurrings' %}aria-current="page"{% endif %}>Recorrentes</a>
+</nav>
+{% endmacro %}

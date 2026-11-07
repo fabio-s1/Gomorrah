@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% from "_macros.html" import subnav %}
+{% block title %}Metas · Gomorrah{% endblock %}
+{% block content %}
+{{ subnav('goals') }}
+<h1>Metas de economia</h1>
+<p class="muted">O progresso de cada meta é o saldo da carteira vinculada. Crie uma carteira para cada objetivo (ex.: "Reserva de emergência") e use "Guardar dinheiro" para transferir até ela.</p>
+<div class="actionrow"><a class="btn" href="{{ url_for('new_goal') }}">+ Nova meta</a></div>
+{% if items %}
+<ul class="goals">
+  {% for i in items %}
+  <li>
+    <div class="line"><strong>{{ i.g.name }}</strong><span>{{ i.saved|brl }} <small>/ {{ i.g.target_cents|brl }}</small></span></div>
+    <div class="track"><span class="fill {{ 'done' if i.done }}" style="width: {{ i.pct }}%"></span></div>
+    <div class="line">
+      <small>{{ i.g.wallet.name }} · {{ i.pct }}%{% if i.g.deadline %} · até {{ i.g.deadline.strftime('%d/%m/%Y') }}{% endif %}</small>
+      <small>
+        {% if i.done %}Meta atingida
+        {% elif i.late %}Prazo vencido · faltam {{ i.remaining|brl }}
+        {% elif i.per_month %}Guarde {{ i.per_month|brl }}/mês · {{ i.months }} mês(es)
+        {% else %}Faltam {{ i.remaining|brl }}{% endif %}
+      </small>
+    </div>
+    <div class="goalactions">
+      <a href="{{ url_for('new_transfer', para=i.g.wallet_id) }}">Guardar dinheiro</a>
+      <a href="{{ url_for('edit_goal', goal_id=i.g.id) }}">Editar</a>
+      <form method="post" action="{{ url_for('delete_goal', goal_id=i.g.id) }}" onsubmit="return confirm('Excluir esta meta?')">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><button class="link danger">Excluir</button>
+      </form>
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}<p class="empty">Nenhuma meta ainda.</p>{% endif %}
+{% endblock %}

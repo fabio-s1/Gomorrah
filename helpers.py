@@ -1,3 +1,4 @@
+import calendar
 import re
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -44,3 +45,31 @@ def parse_amount(raw, allow_zero=False):
             or value > Decimal("999999999")):
         raise InvalidOperation
     return int((value * 100).to_integral_value())
+
+
+def clamp_day(year, month, day):
+    """Data com o dia pedido, limitado ao último dia do mês (dia 31 em fevereiro -> 28/29)."""
+    return date(year, month, min(day, calendar.monthrange(year, month)[1]))
+
+
+def add_month(d, day):
+    """Próxima ocorrência mensal depois de `d`, sempre no dia `day` (sem 'derivar' de 31 para 28)."""
+    return clamp_day(d.year + (d.month == 12), d.month % 12 + 1, day)
+
+
+def pending_dues(next_due, day, today, end_date=None):
+    """Vencimentos já ocorridos (<= hoje), o próximo vencimento e se a série terminou (passou de end_date)."""
+    dues = []
+    while next_due <= today and not (end_date and next_due > end_date):
+        dues.append(next_due)
+        next_due = add_month(next_due, day)
+    return dues, next_due, bool(end_date and next_due > end_date)
+
+
+def months_until(deadline, today):
+    return max((deadline.year - today.year) * 12 + deadline.month - today.month, 1)
+
+
+def monthly_needed(remaining, deadline, today):
+    """Quanto guardar por mês (arredondado para cima) para atingir a meta até o prazo."""
+    return -(-remaining // months_until(deadline, today)) if remaining > 0 else 0

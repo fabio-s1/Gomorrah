@@ -1,7 +1,8 @@
 {% extends "base.html" %}
-{% from "_macros.html" import monthnav with context %}
+{% from "_macros.html" import monthnav, subnav with context %}
 {% block title %}Orçamentos · Gomorrah{% endblock %}
 {% block content %}
+{{ subnav('budgets') }}
 {{ monthnav('budgets', month, prev, next) }}
 <p class="muted">Defina quanto pretende gastar em cada categoria neste mês. Orçado: {{ total_budget|brl }} · Gasto: {{ total_spent|brl }}</p>
 <form method="post" class="budgetform">
