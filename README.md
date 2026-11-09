@@ -67,14 +67,12 @@ PowerShell: `$env:GOMORRAH_PASSWORD="sua-senha"` · Linux/macOS: `export GOMORRA
 
 ## Usar no celular e fora de casa
 
-O app precisa de **HTTPS** para ser instalável (o Chrome só oferece "Instalar app" em HTTPS). Opções:
+O app precisa de **HTTPS** para ser instalável (o Chrome só oferece "Instalar app" em HTTPS; no iPhone use Compartilhar → Adicionar à Tela de Início). Opções:
 
-- **Tailscale (privado):** instale no PC/servidor e no celular e rode `tailscale serve --bg 5000`. Você recebe um endereço `https://….ts.net` acessível só pelos seus aparelhos.
+- **Tailscale (privado, recomendado):** só os seus aparelhos acessam e não há portas abertas na internet. Passo a passo em [Implantação em servidor](#implantação-em-servidor-raspberry-pi--debian). Em um PC de desenvolvimento, rode `tailscale serve --bg 5000` e abra o endereço `https://….ts.net` mostrado.
 - **Cloudflare Tunnel (domínio próprio):** expõe `https://gomorrah.seudominio.com` sem abrir portas. Use junto com Cloudflare Access e a senha do app.
-- **Wi-Fi local:** `flask --app app run --host 0.0.0.0` e abra `http://IP-DO-PC:5000`. Funciona como site, sem instalação como app. Defina `GOMORRAH_PASSWORD`.
+- **Wi-Fi local:** `flask --app app run --host 0.0.0.0` e abra `http://IP-DO-PC:5000`. Funciona como site, sem instalação como app. **Defina `GOMORRAH_PASSWORD`.**
 
-Servidor 24/7 (Raspberry Pi, VPS): use Gunicorn em vez do servidor de desenvolvimento:
-`pip install gunicorn && gunicorn --preload -w 2 -b 127.0.0.1:8000 app:app`.
 Nunca use `--debug` fora do seu computador de desenvolvimento.
 
 ## Carteiras e patrimônio
@@ -180,9 +178,185 @@ Cabeçalho: `tipo,data,valor,categoria,descricao,carteira,destino`. Os valores a
 
 `data` em `AAAA-MM-DD`; `valor` aceita `49.90`, `49,90` ou `1.234,56`. Carteiras citadas que não existem são criadas. CSVs antigos (sem as colunas `carteira` e `destino`) continuam funcionando.
 
+## Implantação em servidor (Raspberry Pi / Debian)
+
+Para deixar o Gomorrah no ar 24 horas em casa. Testado no Debian 12 (Raspberry Pi OS). Troque `USUARIO` e `NOME-DO-SERVIDOR` pelos seus.
+
+### 1. Preparar o sistema e instalar
+
+```bash
+sudo apt update && sudo apt install -y git python3 python3-venv python3-pip sqlite3
+sudo timedatectl set-timezone America/Sao_Paulo
+git clone <url-do-repositorio> ~/gomorrah
+cd ~/gomorrah
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt gunicorn
+```
+
+Ajuste o fuso ao seu: os lançamentos recorrentes são criados pela **data do servidor**, e um fuso errado muda o dia do vencimento. Não rode o app antes de copiar o seu banco (se estiver migrando de outra máquina), porque ele criaria um banco vazio.
+
+### 2. Criar o serviço (sobe sozinho ao ligar)
+
+```bash
+sudo tee /etc/gomorrah.env > /dev/null << 'EOF'
+GOMORRAH_PASSWORD=troque-por-uma-senha-forte
+EOF
+sudo chmod 600 /etc/gomorrah.env
+
+sudo tee /etc/systemd/system/gomorrah.service > /dev/null << EOF
+[Unit]
+Description=Gomorrah (controle financeiro)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=$USER
+WorkingDirectory=$HOME/gomorrah
+EnvironmentFile=/etc/gomorrah.env
+ExecStart=$HOME/gomorrah/.venv/bin/gunicorn --preload -w 2 -b 127.0.0.1:8000 app:app
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now gomorrah
+systemctl status gomorrah --no-pager
+```
+
+A senha fica num arquivo que só o root lê. No segundo bloco o `EOF` está **sem aspas** de propósito, para o terminal preencher `$USER` e `$HOME`. O endereço `127.0.0.1:8000` deixa o app acessível só pelo próprio servidor (use com o Tailscale). Para testar pela rede local, troque temporariamente por `0.0.0.0:8000`, com a senha definida, e rode `sudo systemctl daemon-reload && sudo systemctl restart gomorrah`.
+
+| Quero... | Comando |
+|---|---|
+| Parar / iniciar / reiniciar | `sudo systemctl stop gomorrah` · `start` · `restart` |
+| Ver se está no ar | `systemctl status gomorrah --no-pager` |
+| Ver erros recentes | `sudo journalctl -u gomorrah -n 50 --no-pager` |
+| Acompanhar o log ao vivo | `sudo journalctl -u gomorrah -f` |
+
+### 3. Acesso privado com Tailscale
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+sudo tailscale serve --bg 8000
+sudo tailscale serve status
+```
+
+1. No painel do Tailscale (login.tailscale.com/admin/dns), ligue o **MagicDNS** e os **HTTPS Certificates**.
+2. Em **Machines**, use **Disable key expiry** no servidor, ou ele sai da rede quando a chave expirar.
+3. Abra o endereço `https://NOME.SUA-REDE.ts.net` mostrado pelo `status` (a primeira visita pode demorar alguns segundos para emitir o certificado) e instale o app pelo navegador do celular.
+4. Para desfazer: `sudo tailscale serve --https=443 off`.
+
+O `--bg` mantém a publicação ativa depois de fechar o terminal e após reiniciar o servidor.
+
+### 4. Atualizar o código no servidor
+
+Edite e teste no seu computador, envie ao GitHub e, no servidor:
+
+```bash
+~/bin/gomorrah-backup.sh                      # veja "Backup e restauração"
+sudo systemctl stop gomorrah
+cd ~/gomorrah && git pull
+source .venv/bin/activate && pip install -r requirements.txt
+sudo systemctl start gomorrah
+sudo journalctl -u gomorrah -n 20 --no-pager
+```
+
+O Gunicorn mantém o código na memória, então mudanças só valem depois de reiniciar o serviço. Os dados em `instance/` não são tocados pelo `git pull`.
+
+## Backup e restauração
+
+O único arquivo essencial é **`instance/gomorrah.db`** (lançamentos, carteiras, categorias, orçamentos, metas e recorrentes). O código está no GitHub e o `.venv` se recria. A senha fica em `/etc/gomorrah.env`: guarde-a no seu gerenciador de senhas, não junto com o banco. `instance/secret.key` é dispensável (sem ele, só é preciso entrar de novo).
+
+Não copie o arquivo com o app em uso: use o `.backup` do SQLite, que gera uma cópia consistente. Script de backup no servidor (`~/bin/gomorrah-backup.sh`):
+
+```bash
+mkdir -p ~/bin ~/backups && chmod 700 ~/backups
+tee ~/bin/gomorrah-backup.sh > /dev/null << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+DB="$HOME/gomorrah/instance/gomorrah.db"
+DEST="$HOME/backups"
+OUT="$DEST/gomorrah-$(date +%F_%H%M).db"
+
+sqlite3 "$DB" ".backup '$OUT'"
+if [ "$(sqlite3 "$OUT" 'PRAGMA integrity_check;')" != "ok" ]; then
+  echo "Backup corrompido, descartado: $OUT" >&2
+  rm -f "$OUT"
+  exit 1
+fi
+chmod 600 "$OUT"
+
+# mantém só os 30 mais recentes
+ls -1t "$DEST"/gomorrah-*.db | tail -n +31 | xargs -r rm --
+echo "Backup criado: $OUT"
+EOF
+chmod 700 ~/bin/gomorrah-backup.sh
+```
+
+**Semanal e automático** (domingo, 3h):
+
+```bash
+(crontab -l 2>/dev/null; echo '0 3 * * 0 $HOME/bin/gomorrah-backup.sh >> $HOME/backups/backup.log 2>&1') | crontab -
+```
+
+**Copiar para o seu computador** (um backup que mora só no cartão SD não protege contra falha do cartão). Passo a passo, no PowerShell:
+
+```powershell
+ssh USUARIO@NOME-DO-SERVIDOR "~/bin/gomorrah-backup.sh"
+scp USUARIO@NOME-DO-SERVIDOR:~/backups/gomorrah-AAAA-MM-DD_HHMM.db D:\Backups\Gomorrah\
+Get-FileHash D:\Backups\Gomorrah\gomorrah-AAAA-MM-DD_HHMM.db -Algorithm SHA256
+ssh USUARIO@NOME-DO-SERVIDOR "sha256sum ~/backups/gomorrah-AAAA-MM-DD_HHMM.db"
+```
+
+Os dois códigos SHA256 precisam ser iguais. Em Linux/macOS, use o mesmo `ssh`/`scp` e `sha256sum`.
+
+<details>
+<summary>Script PowerShell que faz tudo em um comando</summary>
+
+```powershell
+$Server = "USUARIO@NOME-DO-SERVIDOR"
+$Dest   = "D:\Backups\Gomorrah"
+New-Item -ItemType Directory -Force $Dest | Out-Null
+
+$line   = ssh $Server "~/bin/gomorrah-backup.sh" | Select-Object -Last 1
+$remote = $line -replace '^Backup criado: ', ''
+$name   = Split-Path $remote -Leaf
+
+scp "${Server}:$remote" $Dest
+$local  = (Get-FileHash "$Dest\$name" -Algorithm SHA256).Hash
+$server = (ssh $Server "sha256sum '$remote'").Split(' ')[0]
+
+if ($local -ieq $server) { Write-Host "OK: $name copiado e conferido" -ForegroundColor Green }
+else { Write-Host "ERRO: o arquivo copiado difere do original" -ForegroundColor Red }
+```
+
+</details>
+
+**Restaurar** (com o app parado):
+
+```bash
+sudo systemctl stop gomorrah
+mv ~/gomorrah/instance/gomorrah.db ~/gomorrah/instance/gomorrah.db.antigo
+```
+
+```powershell
+scp D:\Backups\Gomorrah\gomorrah-AAAA-MM-DD_HHMM.db USUARIO@NOME-DO-SERVIDOR:~/gomorrah/instance/gomorrah.db
+```
+
+```bash
+chmod 600 ~/gomorrah/instance/gomorrah.db
+sudo systemctl start gomorrah
+```
+
+Rotina sugerida: cópia semanal automática no servidor, cópia para o PC a cada 15 dias e uma cópia mensal em mídia externa. Os arquivos contêm todas as suas finanças: guarde em disco criptografado ou em um `.7z` com senha, nunca em nuvem sem criptografia nem no GitHub. **Teste a restauração ao menos uma vez.**
+
 ## Manutenção
 
-**Backup:** copie `instance/gomorrah.db` ou use Ajustes → Exportar CSV. Restaurar: pare o app e substitua o arquivo.
+**Backup:** veja [Backup e restauração](#backup-e-restauração). O CSV (Ajustes → Exportar CSV) é só uma camada extra: não inclui metas nem recorrentes.
 
 **Adicionar um campo (ex.: "observação" em lançamentos):**
 1. Declare a coluna em `models.py`.
@@ -208,6 +382,8 @@ Cabeçalho: `tipo,data,valor,categoria,descricao,carteira,destino`. Os valores a
 | Porta 5000 ocupada | `flask --app app run --port 5001` |
 | Não aparece "Instalar app" | Use o endereço HTTPS, recarregue a página uma vez |
 | "Sem conexão" no celular | Servidor parado ou VPN/rede desconectada |
+| Recorrentes criados no dia errado | Confira o fuso do servidor com `timedatectl` |
+| 502 / Bad Gateway pelo Tailscale | O serviço caiu: `sudo systemctl restart gomorrah` e `journalctl -u gomorrah` |
 
 Não há testes automatizados ainda; ao mexer no código, teste manualmente as telas e o CSV.
 
@@ -217,3 +393,5 @@ O repositório deve conter **somente código**. Seus dados ficam em `instance/` 
 todos ignorados pelo `.gitignore`. Antes de cada commit, rode `git status` e confira que nenhum desses arquivos aparece.
 Se um banco ou chave for versionado por engano, apagar o arquivo depois **não basta** (ele continua no histórico):
 reescreva o histórico antes de publicar e, se já publicou, troque a senha e apague `instance/secret.key`.
+
+**Em produção:** use sempre `GOMORRAH_PASSWORD`, mantenha o Gunicorn escutando só em `127.0.0.1` atrás do Tailscale e não publique no GitHub o endereço da sua rede, IPs, usuários nem senhas. Os blocos deste README usam valores de exemplo (`USUARIO`, `NOME-DO-SERVIDOR`).
